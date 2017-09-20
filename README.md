@@ -15,3 +15,4 @@ In emotional clustering part, we divide the emotion into two parts: positive and
 
 By using basic data processing method, I calculate the frequency of short and long sentences. Although they use short and long sentences randomly. In general, the presidents of Democratic tend to be more likely to use short sentences than that of Republican.
 
+
