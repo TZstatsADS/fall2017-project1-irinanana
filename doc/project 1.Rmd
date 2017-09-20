@@ -1,0 +1,404 @@
+---
+output: pdf_document
+---
+
+
+
+#Project 1
+#Name: Yina Wei
+#UNI: yw2922
+
+
+# This project wants to find the differences between two parties and what they have in common. The methods used in the project are topic modelling, emotional clustering and basic data processing method. 
+
+#Loading pachkages and data from several websites is the first step. After processing data which include deleting the rows that have empty data, adjusting the data into the appropriate format and dividing data into two subsets, the project uses the methods mentioned above to find the relationship between the speeches of presidents from different party.
+
+#Step 1
+
+#load packages
+```{r, message=FALSE, warning=FALSE}
+packages.used=c("rvest", "tibble", "qdap", 
+                "sentimentr", "gplots", "dplyr",
+                "tm", "syuzhet", "factoextra", 
+                "beeswarm", "scales", "RColorBrewer",
+                "RANN", "tm", "topicmodels")
+
+# check packages that need to be installed.
+packages.needed=setdiff(packages.used, 
+                        intersect(installed.packages()[,1], 
+                                  packages.used))
+# install additional packages
+if(length(packages.needed)>0){
+  install.packages(packages.needed, dependencies = TRUE)
+}
+
+# load packages
+library("rvest")
+library("tibble")
+library("qdap")
+library("sentimentr")
+library("gplots")
+library("dplyr")
+library("tm")
+library("syuzhet")
+library("factoextra")
+library("beeswarm")
+library("scales")
+library("RColorBrewer")
+library("RANN")
+library("tm")
+library("topicmodels")
+
+source("../lib/plotstacked.R")
+source("../lib/speechFuncs.R")
+```
+
+
+#processing data
+
+```{r, message=FALSE, warning=FALSE}
+
+main.page <- read_html(x = "http://www.presidency.ucsb.edu/inaugurals.php")
+inaug=f.speechlinks(main.page)
+as.Date(inaug[,1], format="%B %e, %Y")
+inaug=inaug[-nrow(inaug),] 
+main.page=read_html("http://www.presidency.ucsb.edu/nomination.php")
+nomin <- f.speechlinks(main.page)
+nomin<-nomin[-47,]
+main.page=read_html("http://www.presidency.ucsb.edu/farewell_addresses.php")
+farewell <- f.speechlinks(main.page)
+inaug.list=read.csv("../data/inauglist.csv", stringsAsFactors = FALSE)
+nomin.list=read.csv("../data/nominlist.csv", stringsAsFactors = FALSE)
+farewell.list=read.csv("../data/farewelllist.csv", stringsAsFactors = FALSE)
+```
+
+
+# scrap the texts of speeches from the speech URLs.
+
+```{r}
+speech.list=rbind(inaug.list, nomin.list, farewell.list)
+speech.list$type=c(rep("inaug", nrow(inaug.list)),
+                   rep("nomin", nrow(nomin.list)),
+                   rep("farewell", nrow(farewell.list)))
+speech.url=rbind(inaug, nomin, farewell)
+speech.list=cbind(speech.list, speech.url)
+speech.list$fulltext=NA
+for(i in seq(nrow(speech.list))) {
+  text <- read_html(speech.list$urls[i]) %>% # load the page
+    html_nodes(".displaytext") %>% # isloate the text
+    html_text() # get the text
+  speech.list$fulltext[i]=text
+  # Create the file name
+  filename <- paste0("../data/fulltext/", 
+                     speech.list$type[i],
+                     speech.list$File[i], "-", 
+                     speech.list$Term[i], ".txt")
+  sink(file = filename) %>% 
+  cat(text)  
+  sink() 
+}
+```
+
+```{r, message=FALSE, warning=FALSE}
+sentence.list=NULL
+for(i in 1:nrow(speech.list)){
+  sentences=sent_detect(speech.list$fulltext[i],
+                        endmarks = c("?", ".", "!", "|",";"))
+  if(length(sentences)>0){
+    emotions=get_nrc_sentiment(sentences)
+    word.count=word_count(sentences)
+    emotions=diag(1/(word.count+0.01))%*%as.matrix(emotions)
+    sentence.list=rbind(sentence.list, 
+                        cbind(speech.list[i,-ncol(speech.list)],
+                              sentences=as.character(sentences), 
+                              word.count,
+                              emotions,
+                              sent.id=1:length(sentences)
+                              )
+    )
+  }
+}
+```
+
+```{r}
+sentence.list=
+  sentence.list%>%
+  filter(!is.na(word.count)) 
+
+```
+
+
+
+#dividing data into two subsets
+
+```{r}
+
+dem<-sentence.list[which(sentence.list[,"Party"]=="Democratic"),]
+rep<-sentence.list[which(sentence.list[,"Party"]=="Republican"),]
+
+corpus.dem=dem[2:(nrow(dem)-1), ]
+sentence.pre1=dem$sentences[1:(nrow(dem)-2)]
+sentence.post1=dem$sentences[3:(nrow(dem)-1)]
+corpus.dem$snipets=paste(sentence.pre1, corpus.dem$sentences, sentence.post1, sep=" ")
+rm.rows=(1:nrow(corpus.dem))[corpus.dem$sent.id==1]
+rm.rows
+rm.rows=c(rm.rows, rm.rows-1)
+corpus.dem=corpus.dem[-rm.rows, ]
+
+corpus.rep=rep[2:(nrow(rep)-1), ]
+sentence.pre2=rep$sentences[1:(nrow(rep)-2)]
+sentence.post2=rep$sentences[3:(nrow(rep)-1)]
+corpus.rep$snipets=paste(sentence.pre2, corpus.rep$sentences, sentence.post2, sep=" ")
+rm.rows=(1:nrow(corpus.rep))[corpus.rep$sent.id==1]
+rm.rows=c(rm.rows, rm.rows-1)
+corpus.rep=corpus.rep[-rm.rows, ]
+```
+
+## Text mining
+```{r}
+docs.dem <- Corpus(VectorSource(corpus.dem$snipets))
+docs.rep <- Corpus(VectorSource(corpus.rep$snipets))
+writeLines(as.character(docs.dem[[sample(1:nrow(corpus.dem), 1)]]))
+writeLines(as.character(docs.rep[[sample(1:nrow(corpus.rep), 1)]]))
+```
+
+### Text basic processing
+
+
+```{r}
+#remove potentially problematic symbols
+docs.dem <-tm_map(docs.dem,content_transformer(tolower))
+docs.rep <-tm_map(docs.rep,content_transformer(tolower))
+
+#remove punctuation
+docs.dem <- tm_map(docs.dem, removePunctuation)
+docs.rep <- tm_map(docs.rep, removePunctuation)
+
+#Strip digits
+docs.dem <- tm_map(docs.dem, removeNumbers)
+docs.rep <- tm_map(docs.rep, removePunctuation)
+
+#remove stopwords
+docs.dem <- tm_map(docs.dem, removeWords, stopwords("english"))
+docs.rep <- tm_map(docs.rep, removeWords, stopwords("english"))
+
+#remove whitespace
+docs.dem <- tm_map(docs.dem, stripWhitespace)
+docs.rep <- tm_map(docs.rep, stripWhitespace)
+
+#Stem document
+docs.dem <- tm_map(docs.dem,stemDocument)
+docs.rep <- tm_map(docs.rep,stemDocument)
+
+```
+
+#Step 2 finding the relationship
+
+###(1) Topic modeling
+
+
+```{r}
+dtm.dem <- DocumentTermMatrix(docs.dem)
+rownames(dtm.dem) <- paste(corpus.dem$type, corpus.dem$File,
+                       corpus.dem$Term, corpus.dem$sent.id, sep="_")
+
+rowTotals <- apply(dtm.dem , 1, sum) 
+
+dtm.dem  <- dtm.dem[rowTotals> 0, ]
+corpus.dem=corpus.dem[rowTotals>0, ]
+
+dtm.rep <- DocumentTermMatrix(docs.rep)
+rownames(dtm.rep) <- paste(corpus.rep$type, corpus.rep$File,
+                       corpus.rep$Term, corpus.rep$sent.id, sep="_")
+
+rowTotals <- apply(dtm.rep , 1, sum) 
+
+dtm.rep  <- dtm.rep[rowTotals> 0, ]
+corpus.rep=corpus.rep[rowTotals>0, ]
+
+```
+
+Run LDA
+
+```{r}
+#Set parameters for Gibbs sampling
+burnin <- 4000
+iter <- 2000
+thin <- 500
+seed <-list(2003,5,63,100001,765)
+nstart <- 5
+best <- TRUE
+
+# When the number of topics is 10, the result is the best.
+k <- 10
+
+#Run LDA using Gibbs sampling
+ldaOut <-LDA(dtm.dem, k, method="Gibbs", control=list(nstart=nstart, 
+                                                 seed = seed, best=best,
+                                                 burnin = burnin, iter = iter, 
+                                                 thin=thin))
+ldaOut.topics <- as.matrix(topics(ldaOut))
+table(c(1:k, ldaOut.topics))
+write.csv(ldaOut.topics,file=paste("../out/LDAGibbs",k,"DocsToTopics.csv"))
+
+#top 6 terms in each topic
+ldaOut.terms <- as.matrix(terms(ldaOut,20))
+write.csv(ldaOut.terms,file=paste("../out/LDAGibbs",k,"TopicsToTerms.csv"))
+
+#probabilities associated with each topic assignment
+topicProbabilities <- as.data.frame(ldaOut@gamma)
+write.csv(topicProbabilities,file=paste("../out/LDAGibbs",k,"TopicProbabilities.csv"))
+
+terms.beta=ldaOut@beta
+terms.beta=scale(terms.beta)
+topics.terms=NULL
+for(i in 1:k){
+  topics.terms=rbind(topics.terms, ldaOut@terms[order(terms.beta[i,], decreasing = TRUE)[1:7]])
+}
+#topic terms for Democratics
+topics.terms
+ldaOut.terms
+
+ldaOut1 <-LDA(dtm.rep, k, method="Gibbs", control=list(nstart=nstart, 
+                                                 seed = seed, best=best,
+                                                 burnin = burnin, iter = iter, 
+                                                 thin=thin))
+ldaOut.topics <- as.matrix(topics(ldaOut1))
+table(c(1:k, ldaOut.topics))
+write.csv(ldaOut.topics,file=paste("../out/LDAGibbs",k,"DocsToTopics.csv"))
+
+#top 6 terms in each topic
+ldaOut.terms <- as.matrix(terms(ldaOut1,20))
+write.csv(ldaOut.terms,file=paste("../out/LDAGibbs",k,"TopicsToTerms.csv"))
+
+#probabilities associated with each topic assignment
+topicProbabilities <- as.data.frame(ldaOut1@gamma)
+write.csv(topicProbabilities,file=paste("../out/LDAGibbs",k,"TopicProbabilities.csv"))
+
+terms.beta=ldaOut1@beta
+terms.beta=scale(terms.beta)
+topics.terms=NULL
+for(i in 1:k){
+  topics.terms=rbind(topics.terms, ldaOut1@terms[order(terms.beta[i,], decreasing = TRUE)[1:7]])
+}
+#topic terms for republicans
+topics.terms
+ldaOut.terms
+```
+
+Summary:
+
+For the presidents from Democratic Party, the topics include public citizens, world peace, people's interest, family, government power, laws and regulations and how to make America better.
+
+For the presidents from Republican Party, the topics include women, liberty, opportunities, economy, world peace, foreign policy, job, tax.
+
+Compared to Democratic Party, the presidents of Republican were more focused on the reality problems such as jobs, tax system, opportunities of economy. Also, they emphasized ethnicity, sexism, liberty.
+
+What they have in common is that they both mentioned the topics like world peace, family, promises of making America great again and government administrations.
+
+#(2) frequency of short or long sentences of two parties
+
+```{r}
+memberdem<-unique(dem$President)
+par(mar=c(4, 11, 2, 2))
+
+sentence.list.dem=filter(dem, File%in%memberdem)
+sentence.list.dem$File=factor(sentence.list.dem$File)
+sentence.list.dem$FileOrdered=reorder(sentence.list.dem$File, 
+                                  sentence.list.dem$word.count, 
+                                  mean, 
+                                  order=T)
+
+beeswarm(word.count~FileOrdered, 
+         data=sentence.list.dem,
+         horizontal = TRUE, 
+         pch=16, col=alpha(brewer.pal(9, "Set1"), 0.6), 
+         cex=0.55, cex.axis=0.8, cex.lab=0.8,
+         spacing=5/nlevels(sentence.list.dem$FileOrdered),
+         las=2, xlab="Number of words in a sentence.")
+
+memberrep<-unique(rep$President)
+par(mar=c(4, 11, 2, 2))
+sentence.list.rep=filter(rep, File%in%memberrep)
+sentence.list.rep$File=factor(sentence.list.rep$File)
+
+sentence.list.rep$FileOrdered=reorder(sentence.list.rep$File, 
+                                  sentence.list.rep$word.count, 
+                                  mean, 
+                                  order=T)
+
+beeswarm(word.count~FileOrdered, 
+         data=sentence.list.rep,
+         horizontal = TRUE, 
+         pch=16, col=alpha(brewer.pal(9, "Set1"), 0.6), 
+         cex=0.55, cex.axis=0.8, cex.lab=0.8,
+         spacing=5/nlevels(sentence.list.rep$FileOrdered),
+         las=2, xlab="Number of words in a sentence.")
+
+```
+
+Summary:
+
+Although they use short and long sentences randomly. In general, the presidents of Democratic tend to be more likely to use short sentences than that of Republican.
+
+#(3) cluster of positive/negative
+```{r, fig.width=2, fig.height=2}
+heatmap.2(cor(dem%>%select(negative:positive)), 
+          scale = "none", 
+          col = bluered(100), , margin=c(2, 2), key=F,
+          trace = "none", density.info = "none")
+
+par(mar=c(4, 6, 2, 1))
+emo.means=colMeans(select(dem, negative:positive)>0.01)
+col.use=c("red2", "darkgoldenrod1")
+barplot(emo.means[order(emo.means)], las=2, col=col.use[order(emo.means)], horiz=T)
+presid.summary=tbl_df(dem)%>%
+  filter(File%in%memberdem)%>%
+  summarise(
+    negative=mean(negative),
+    positive=mean(positive)
+  )
+
+presid.summary=as.data.frame(presid.summary)
+rownames(presid.summary)=as.character((presid.summary[,1]))
+km.dem=kmeans(presid.summary[,-1], iter.max=200,2)
+fviz_cluster(km.dem, 
+             stand=F, repel= TRUE,
+             data = presid.summary[,-1], xlab="", xaxt="n",
+             show.clust.cent=FALSE)
+```
+
+
+
+```{r, fig.width=2, fig.height=2}
+heatmap.2(cor(rep%>%select(negative:positive)), 
+          scale = "none", 
+          col = bluered(100), , margin=c(2, 2), key=F,
+          trace = "none", density.info = "none")
+
+par(mar=c(4, 6, 2, 1))
+emo.means=colMeans(select(rep, negative:positive)>0.01)
+col.use=c("red2", "darkgoldenrod1")
+barplot(emo.means[order(emo.means)], las=2, col=col.use[order(emo.means)], horiz=T)
+presid.summary=tbl_df(rep)%>%
+  filter(File%in%memberrep)%>%
+  summarise(
+    negative=mean(negative),
+    positive=mean(positive)
+  )
+
+presid.summary=as.data.frame(presid.summary)
+rownames(presid.summary)=as.character((presid.summary[,1]))
+km.dem=kmeans(presid.summary[,-1], iter.max=200,2)
+fviz_cluster(km.rep, 
+             stand=F, repel= TRUE,
+             data = presid.summary[,-1], xlab="", xaxt="n",
+             show.clust.cent=FALSE)
+```
+
+
+Summary:
+
+The frequency of positive words versus nagative words are the same between two parties.
+The presidents tend to use positive words and the frequency of the positive words is far more than that of negative words.
+
